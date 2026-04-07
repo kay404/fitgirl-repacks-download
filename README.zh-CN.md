@@ -76,3 +76,13 @@ python3 download.py https://fitgirl-repacks.site/black-myth-wukong/ -r 5
 - FuckingFast 的 `/dl/` token 有时效性，重试时会自动重新获取
 - 建议并行数不要设太高（2-3 即可），避免被服务器限流
 - 下载中断后直接重新运行相同命令即可，已完成的文件会自动跳过
+
+## 免责声明
+
+本工具仅供学习和技术研究用途，不托管、分发或提供任何受版权保护的内容。使用者应自行确保其使用行为符合所在地区的法律法规。
+
+**我们强烈建议购买正版游戏以支持开发者。** 游戏开发者投入了数年心血打造这些作品，购买正版是支持他们继续创作的最好方式。
+
+- [Steam](https://store.steampowered.com/)
+- [Epic Games Store](https://store.epicgames.com/)
+- [GOG](https://www.gog.com/)

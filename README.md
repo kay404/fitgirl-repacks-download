@@ -76,3 +76,13 @@ python3 download.py https://fitgirl-repacks.site/black-myth-wukong/ -r 5
 - FuckingFast `/dl/` tokens are time-limited; retries automatically re-fetch a fresh token
 - Keep parallel count low (2-3) to avoid server throttling
 - Re-run the same command after interruption — completed files are skipped automatically
+
+## Disclaimer
+
+This tool is provided for educational and technical learning purposes only. It does not host, distribute, or provide any copyrighted content. Users are solely responsible for ensuring their use of this tool complies with applicable laws and regulations.
+
+**We strongly encourage purchasing genuine copies of games to support the developers.** Game developers invest years of effort into creating these experiences — buying the official version is the best way to ensure they can keep making great games.
+
+- [Steam](https://store.steampowered.com/)
+- [Epic Games Store](https://store.epicgames.com/)
+- [GOG](https://www.gog.com/)
