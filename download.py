@@ -16,6 +16,8 @@ Examples:
 import argparse
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 import urllib.request
@@ -25,6 +27,27 @@ from pathlib import Path
 
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+
+def _fetch_via_curl(url: str) -> str | None:
+    """Fallback HTTP GET via system curl (different TLS stack than Python).
+    Useful when Python's SSL fails repeatedly against Cloudflare-fronted hosts."""
+    curl = shutil.which("curl")
+    if not curl:
+        return None
+    try:
+        result = subprocess.run(
+            [curl, "-sSL", "--fail", "--max-time", "30",
+             "-A", UA, url],
+            capture_output=True, timeout=45,
+        )
+        if result.returncode == 0 and result.stdout:
+            return result.stdout.decode("utf-8", errors="replace")
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        print(f"  curl fallback failed (exit {result.returncode}): {stderr}", file=sys.stderr)
+    except Exception as e:
+        print(f"  curl fallback exception: {e}", file=sys.stderr)
+    return None
 
 
 def fetch(url: str, retries: int = 5) -> str:
@@ -40,6 +63,14 @@ def fetch(url: str, retries: int = 5) -> str:
                 wait = min(2 ** attempt, 30)
                 print(f"  fetch failed ({type(e).__name__}: {e}); retry {attempt}/{retries - 1} in {wait}s", file=sys.stderr)
                 time.sleep(wait)
+
+    # Python's urllib exhausted retries — try system curl, which uses a
+    # different TLS stack and often gets past Cloudflare TLS-fingerprint blocks.
+    print(f"  urllib failed after {retries} attempts; falling back to curl", file=sys.stderr)
+    body = _fetch_via_curl(url)
+    if body is not None:
+        return body
+
     raise last_err  # type: ignore[misc]
 
 
