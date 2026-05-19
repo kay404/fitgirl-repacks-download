@@ -15,6 +15,7 @@ Examples:
 
 import argparse
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -57,11 +58,22 @@ def fetch(url: str, retries: int = 5) -> str:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if attempt < retries:
+                # 5xx / 429 are usually rate limits — back off much harder with jitter
+                # so we drop out of the host's sliding window.
+                if e.code >= 500 or e.code == 429:
+                    wait = min(15 * (2 ** (attempt - 1)), 120) + random.uniform(0, 10)
+                else:
+                    wait = min(2 ** attempt, 30)
+                print(f"  fetch failed (HTTP {e.code}); retry {attempt}/{retries - 1} in {wait:.0f}s", file=sys.stderr)
+                time.sleep(wait)
         except Exception as e:
             last_err = e
             if attempt < retries:
-                wait = min(2 ** attempt, 30)
-                print(f"  fetch failed ({type(e).__name__}: {e}); retry {attempt}/{retries - 1} in {wait}s", file=sys.stderr)
+                wait = min(2 ** attempt, 30) + random.uniform(0, 2)
+                print(f"  fetch failed ({type(e).__name__}: {e}); retry {attempt}/{retries - 1} in {wait:.0f}s", file=sys.stderr)
                 time.sleep(wait)
 
     # Python's urllib exhausted retries — try system curl, which uses a
@@ -106,6 +118,36 @@ def extract_download_url(page_url: str) -> str | None:
     return None
 
 
+def _size_marker_path(filepath: str) -> str:
+    return filepath + ".size"
+
+
+def _record_complete(filepath: str, total: int) -> None:
+    """Write a sidecar file recording the final byte count of a finished download.
+    Used to fast-skip already-completed files on re-runs without re-resolving."""
+    try:
+        with open(_size_marker_path(filepath), "w", encoding="utf-8") as f:
+            f.write(str(total))
+    except Exception:
+        pass
+
+
+def _is_already_complete(filepath: str) -> int | None:
+    """If the file is fully downloaded according to a previous run's sidecar,
+    return its size; otherwise None. Allows skipping the FuckingFast resolve."""
+    marker = _size_marker_path(filepath)
+    if not (os.path.exists(filepath) and os.path.exists(marker)):
+        return None
+    try:
+        with open(marker, "r", encoding="utf-8") as f:
+            expected = int(f.read().strip())
+        if expected > 0 and os.path.getsize(filepath) == expected:
+            return expected
+    except Exception:
+        pass
+    return None
+
+
 def download_file(dl_url: str, filename: str, output_dir: str) -> tuple[str, bool, str]:
     """Download a file with resume support. Returns (filename, success, message)."""
     filepath = os.path.join(output_dir, filename)
@@ -122,6 +164,7 @@ def download_file(dl_url: str, filename: str, output_dir: str) -> tuple[str, boo
             with urllib.request.urlopen(head_req, timeout=15) as head_resp:
                 remote_size = int(head_resp.headers.get("Content-Length", 0))
                 if remote_size > 0 and resume_offset >= remote_size:
+                    _record_complete(filepath, remote_size)
                     return (filename, True, f"Already complete ({resume_offset / 1024 / 1024:.1f} MB)")
         except Exception:
             pass  # HEAD failed, fall through to normal download
@@ -196,6 +239,10 @@ def download_file(dl_url: str, filename: str, output_dir: str) -> tuple[str, boo
 
             elapsed = time.time() - start_time
             new_bytes = downloaded - resume_offset
+            if total:
+                _record_complete(filepath, total)
+            else:
+                _record_complete(filepath, downloaded)
             return (filename, True, f"Done ({new_bytes / 1024 / 1024:.1f} MB downloaded in {elapsed:.0f}s, total {downloaded / 1024 / 1024:.1f} MB)")
 
     except Exception as e:
@@ -205,12 +252,22 @@ def download_file(dl_url: str, filename: str, output_dir: str) -> tuple[str, boo
 def resolve_and_download(link: dict, output_dir: str, retries: int = 3) -> tuple[str, bool, str]:
     """Resolve a FuckingFast link and download the file, with retry on failure."""
     filename = link["filename"]
+    filepath = os.path.join(output_dir, filename)
+
+    # Fast path: file was fully downloaded on a previous run — skip resolving the
+    # short-lived FuckingFast direct link entirely.
+    cached = _is_already_complete(filepath)
+    if cached is not None:
+        return (filename, True, f"Already complete ({cached / 1024 / 1024:.1f} MB, cached)")
+
     last_err = ""
 
     for attempt in range(1, retries + 1):
         if attempt > 1:
-            wait = min(attempt * 5, 30)
-            print(f"  Retry {attempt}/{retries} for {filename} (waiting {wait}s)")
+            # Longer backoff with jitter: when FuckingFast soft-rate-limits us
+            # with 500s, short waits keep us in the same throttling window.
+            wait = min(20 * attempt, 90) + random.uniform(0, 10)
+            print(f"  Retry {attempt}/{retries} for {filename} (waiting {wait:.0f}s)")
             time.sleep(wait)
 
         print(f"  Resolving: {filename}")
