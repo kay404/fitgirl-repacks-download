@@ -58,7 +58,7 @@ def extract_download_url(page_url: str) -> str | None:
     html = fetch(page_url)
 
     # Look for the window.open URL in the download() function
-    m = re.search(r'window\.open\("(https://fuckingfast\.co/dl/[^"]+)"', html)
+    m = re.search(r'window\.open\("(https://(?:dl\.)?fuckingfast\.co/dl/[^"]+)"', html)
     if m:
         return m.group(1)
 
