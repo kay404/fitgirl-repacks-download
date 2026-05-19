@@ -23,6 +23,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -146,6 +147,57 @@ def _is_already_complete(filepath: str) -> int | None:
     except Exception:
         pass
     return None
+
+
+def autodetect_complete_parts(links: list[dict], output_dir: str) -> tuple[int, list[str]]:
+    """Use multi-volume RAR invariants to identify locally-complete parts without
+    asking FuckingFast.
+
+    A WinRAR multi-volume archive splits at a fixed byte size, so every .partNN.rar
+    except the final one must be exactly that volume size. If two or more local
+    parts in the same archive share an identical byte count, that count *is* the
+    correct complete size — partial files of other parts can be detected as
+    "smaller than the modal size".
+
+    Writes .size markers for files we can prove are complete. Returns
+    (trusted_count, list_of_suspected_partial_filenames).
+    """
+    groups: dict[str, list[tuple[int, dict, int, str]]] = defaultdict(list)
+    for link in links:
+        filepath = os.path.join(output_dir, link["filename"])
+        if not os.path.exists(filepath):
+            continue
+        m = re.match(r'^(.+?)\.part(\d+)\.rar$', link["filename"])
+        if not m:
+            continue  # non-part files can't be verified this way
+        prefix = m.group(1)
+        part_num = int(m.group(2))
+        size = os.path.getsize(filepath)
+        groups[prefix].append((part_num, link, size, filepath))
+
+    trusted = 0
+    suspect: list[str] = []
+    for items in groups.values():
+        sizes = [s for _, _, s, _ in items]
+        modal_size, modal_count = Counter(sizes).most_common(1)[0]
+        if modal_count < 2 or modal_size <= 0:
+            # Not enough evidence to identify the volume size.
+            continue
+        max_part = max(p for p, _, _, _ in items)
+        for part_num, link, size, filepath in items:
+            if os.path.exists(_size_marker_path(filepath)):
+                continue
+            if size == modal_size:
+                # Exactly matches the fixed volume size — guaranteed complete.
+                _record_complete(filepath, size)
+                trusted += 1
+            elif size < modal_size and part_num != max_part:
+                # Cannot legitimately be smaller than the volume size unless it's
+                # the final part. This is a partial download.
+                suspect.append(link["filename"])
+            # part_num == max_part and size < modal_size: could be legitimate
+            # last volume OR partial; leave it for HEAD verification.
+    return trusted, suspect
 
 
 def download_file(dl_url: str, filename: str, output_dir: str) -> tuple[str, bool, str]:
@@ -325,11 +377,12 @@ def main():
     )
     parser.add_argument(
         "--trust-existing", action="store_true",
-        help="Treat already-present local files as complete (writes .size markers "
-             "from their current size). Use after upgrading from an older version "
-             "of this script to avoid re-resolving files you already downloaded. "
-             "WARNING: a partially-downloaded file will be wrongly marked complete; "
-             "delete any known-partial files first."
+        help="Blindly mark every existing local file as complete, even ones the "
+             "auto-detector couldn't verify (non-part files, final volume, "
+             "single-part archives). Use only when you're sure nothing is "
+             "partial. WARNING: a partially-downloaded file will be wrongly "
+             "marked complete; delete any known-partial files first. The "
+             "multi-volume RAR auto-detection runs by default and is safer."
     )
 
     args = parser.parse_args()
@@ -384,9 +437,22 @@ def main():
     # Create output directory
     os.makedirs(args.output, exist_ok=True)
 
-    # Optionally back-fill .size markers from existing local files so that
-    # downloads completed by an older version of this script (or by hand) get
-    # fast-skipped without re-resolving FuckingFast.
+    # Auto-detect complete parts using the WinRAR multi-volume invariant
+    # (every .partNN.rar before the final one shares the same fixed volume size).
+    # This is always safe — only files that provably match the volume size get
+    # marked complete; partial files are left alone for the normal resume path.
+    auto_trusted, suspect = autodetect_complete_parts(filtered, args.output)
+    if auto_trusted:
+        print(f"Auto-detected {auto_trusted} complete part(s) by volume size.")
+    if suspect:
+        print(f"Detected {len(suspect)} partial file(s) — will resume:")
+        for name in suspect:
+            print(f"  - {name}")
+    if auto_trusted or suspect:
+        print()
+
+    # Optional escape hatch: blindly trust every remaining existing local file
+    # (size = local size). Use only when you're certain nothing is partial.
     if args.trust_existing:
         registered = 0
         for link in filtered:
@@ -397,7 +463,8 @@ def main():
                 if size > 0:
                     _record_complete(filepath, size)
                     registered += 1
-        print(f"Trusted {registered} existing file(s) as complete.\n")
+        if registered:
+            print(f"Blindly trusted {registered} additional existing file(s).\n")
 
     # Download
     print(f"Downloading to: {os.path.abspath(args.output)}")
