@@ -27,10 +27,20 @@ from pathlib import Path
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 
-def fetch(url: str) -> str:
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read().decode("utf-8", errors="replace")
+def fetch(url: str, retries: int = 5) -> str:
+    last_err: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except Exception as e:
+            last_err = e
+            if attempt < retries:
+                wait = min(2 ** attempt, 30)
+                print(f"  fetch failed ({type(e).__name__}: {e}); retry {attempt}/{retries - 1} in {wait}s", file=sys.stderr)
+                time.sleep(wait)
+    raise last_err  # type: ignore[misc]
 
 
 def get_fuckingfast_links(fitgirl_url: str) -> list[dict]:
