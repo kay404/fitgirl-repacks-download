@@ -323,6 +323,14 @@ def main():
         "-r", "--retry", type=int, default=3,
         help="Max retry attempts per file on failure (default: 3)"
     )
+    parser.add_argument(
+        "--trust-existing", action="store_true",
+        help="Treat already-present local files as complete (writes .size markers "
+             "from their current size). Use after upgrading from an older version "
+             "of this script to avoid re-resolving files you already downloaded. "
+             "WARNING: a partially-downloaded file will be wrongly marked complete; "
+             "delete any known-partial files first."
+    )
 
     args = parser.parse_args()
 
@@ -375,6 +383,21 @@ def main():
 
     # Create output directory
     os.makedirs(args.output, exist_ok=True)
+
+    # Optionally back-fill .size markers from existing local files so that
+    # downloads completed by an older version of this script (or by hand) get
+    # fast-skipped without re-resolving FuckingFast.
+    if args.trust_existing:
+        registered = 0
+        for link in filtered:
+            filepath = os.path.join(args.output, link["filename"])
+            if (os.path.exists(filepath)
+                    and not os.path.exists(_size_marker_path(filepath))):
+                size = os.path.getsize(filepath)
+                if size > 0:
+                    _record_complete(filepath, size)
+                    registered += 1
+        print(f"Trusted {registered} existing file(s) as complete.\n")
 
     # Download
     print(f"Downloading to: {os.path.abspath(args.output)}")
